@@ -28,7 +28,10 @@ logger = logging.getLogger(__name__)
 OLLAMA_URL   = os.environ.get("OLLAMA_URL",   "http://localhost:11434")
 MODEL_NAME   = os.environ.get("MODEL_NAME",   "tinyllama")
 SECRET_FLAG  = os.environ.get("SECRET_FLAG",  "FLAG{pr0mpt_1nj3ct10n_m4st3r_2024}")
-MAX_TOKENS   = 500
+MAX_TOKENS   = 256   # Keep low — Railway CPU instances have limited RAM
+# Context window: 2048 is enough for this lab and avoids OOM on small instances.
+# llama3.2:1b defaults to 131072 which would require ~16 GB of KV cache RAM.
+CTX_LENGTH   = 2048
 RATE_LIMIT_WINDOW = 60
 RATE_LIMIT_MAX    = 40
 
@@ -120,7 +123,13 @@ def call_ollama(messages: list) -> str:
         "model": MODEL_NAME,
         "messages": messages,
         "stream": False,
-        "options": {"num_predict": MAX_TOKENS, "temperature": 0.7},
+        "options": {
+            "num_predict": MAX_TOKENS,
+            "temperature": 0.7,
+            # Hard-cap the context window — llama3.2:1b defaults to 131072
+            # tokens which allocates ~16 GB KV cache RAM. Fatal on Railway.
+            "num_ctx": CTX_LENGTH,
+        },
     }
     try:
         resp = requests.post(f"{OLLAMA_URL}/api/chat", json=payload, timeout=180)
@@ -183,8 +192,8 @@ def chat():
         return jsonify({"error": str(e)}), 503
 
     sessions[session_id].append({"role": "assistant", "content": response_text})
-    if len(sessions[session_id]) > 40:
-        sessions[session_id] = sessions[session_id][-40:]
+    if len(sessions[session_id]) > 10:  # Keep short — context window is capped at 2048 tokens
+        sessions[session_id] = sessions[session_id][-10:]
 
     flag_leaked = SECRET_FLAG in response_text
     log_interaction(session_id, user_input, response_text, injection_detected)
